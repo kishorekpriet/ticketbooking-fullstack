@@ -1,4 +1,4 @@
-# 🎬 Full-Stack Cinema Booking System (BookMyShow Clone)
+# 🎬 Full-Stack Cinema Booking System 
 
 A complete, enterprise-grade full-stack web application for booking movie tickets. Built with React on the frontend and a Java Spring Boot REST API on the backend, integrated with a MySQL database.
 
