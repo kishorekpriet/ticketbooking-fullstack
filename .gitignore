@@ -1,0 +1,18 @@
+# Frontend ignores
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+
+# Backend ignores
+backend/target/
+backend/.mvn/
+backend/mvnw
+backend/mvnw.cmd
+backend/.idea/
+backend/.classpath
+backend/.project
+backend/.settings/
+
+# General OS ignores
+.DS_Store
+Thumbs.db
