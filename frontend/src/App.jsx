@@ -1,49 +1,81 @@
 import { useState, useEffect } from 'react';
 import './App.css';
+import Auth from './Auth';
 
 function App() {
   const [showBookingPage, setShowBookingPage] = useState(false);
   const [selectedSeats, setSelectedSeats] = useState([]);
-  
-  // NEW: State to remember which seats the database says are taken
   const [bookedSeats, setBookedSeats] = useState([]); 
+  
+  const [isLoggedIn, setIsLoggedIn] = useState(!!localStorage.getItem('token'));
+  const [showAuth, setShowAuth] = useState(false);
   
   const totalSeats = Array.from({ length: 20 }, (_, i) => i + 1);
 
-  // NEW: This runs automatically when the booking page opens
+  // 1. Existing seat fetcher
   useEffect(() => {
     if (showBookingPage) {
       fetchSeats();
     }
   }, [showBookingPage]);
 
+  // 🌟 STRIPE ADDITION 1: Catch the user when they return from the Stripe Payment Page!
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    const paymentStatus = query.get("payment");
+
+    if (paymentStatus === "success") {
+      const pendingSeats = JSON.parse(localStorage.getItem('pendingSeats')) || [];
+      const token = localStorage.getItem('token');
+      const userEmail = localStorage.getItem('userEmail');
+
+      if (pendingSeats.length > 0 && token) {
+        // Now that Stripe got the money, actually book the seats in MySQL!
+        const bookSeatsInDB = async () => {
+          for (const seatId of pendingSeats) {
+            await fetch(`http://localhost:8081/api/tickets/book?movieId=1&seatId=${seatId}&userEmail=${userEmail}`, {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${token}` }
+            });
+          }
+          alert("✅ Payment Successful! Your VIP tickets are locked in.");
+          localStorage.removeItem('pendingSeats'); 
+          setSelectedSeats([]); 
+          fetchSeats(); 
+          
+          window.history.replaceState(null, '', window.location.pathname);
+        };
+        
+        bookSeatsInDB();
+      }
+    }
+
+    if (paymentStatus === "cancelled") {
+      alert("❌ Payment Cancelled. You were not charged.");
+      localStorage.removeItem('pendingSeats');
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+  }, []); 
+
   const fetchSeats = async () => {
     try {
       const response = await fetch('http://localhost:8081/api/seats');
       const data = await response.json();
       
-      console.log("🔥 RAW DATA FROM SPRING BOOT:", data);
-      
       const takenSeatIds = [];
-      
-      // Loop through whatever Spring Boot sent us
       data.forEach(seat => {
-        // Checking every possible way Java might spell "booked"
         if (seat.booked === true || seat.isBooked === true) {
           takenSeatIds.push(seat.id);
         }
       });
         
-      console.log("🔒 THESE SEAT IDs SHOULD BE GRAY:", takenSeatIds);
       setBookedSeats(takenSeatIds);
-      
     } catch (error) {
       console.error("❌ Error fetching seats:", error);
     }
   };
 
   const toggleSeat = (seatId) => {
-    // SECURITY: If the seat is already booked, do absolutely nothing when clicked
     if (bookedSeats.includes(seatId)) return;
 
     if (selectedSeats.includes(seatId)) {
@@ -62,36 +94,116 @@ function App() {
     return total;
   };
 
+  // 🌟 STRIPE ADDITION 2: The Departure (Teleporting the user to Stripe)
   const handlePayment = async () => {
-    for (const seatId of selectedSeats) {
-      try {
-        const response = await fetch(`http://localhost:8081/api/tickets/book?movieId=1&seatId=${seatId}&userEmail=guest@cinema.com`, {
-          method: 'POST'
-        });
+    const token = localStorage.getItem('token');
 
-        if (response.ok) {
-          alert(`✅ Success! Seat ${seatId} has been booked.`);
-        } else {
-          const errorMessage = await response.text();
-          alert(`❌ Failed to book Seat ${seatId}: ${errorMessage}`);
-        }
-      } catch (error) {
-        alert("Error connecting to the server. Is Spring Boot running?");
-      }
+    if (!token) {
+      alert("You must be logged in to book tickets!");
+      setShowAuth(true);
+      return;
     }
-    
-    // Clear the cart and refresh the seat map to instantly turn them gray!
-    setSelectedSeats([]);
-    fetchSeats(); 
+
+    // Save the seats to memory before leaving the page!
+    localStorage.setItem('pendingSeats', JSON.stringify(selectedSeats));
+    const totalAmount = calculateTotal();
+
+    try {
+      const response = await fetch('http://localhost:8081/api/payment/create-checkout-session', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}` 
+        },
+        body: JSON.stringify({ amount: totalAmount }) 
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        // Teleport to the secure Stripe Checkout page!
+        window.location.href = data.checkoutUrl;
+      } else {
+        const errorText = await response.text();
+        alert(`Payment initiation failed: ${errorText}`);
+      }
+    } catch (error) {
+      alert("Error connecting to the server. Is Spring Boot running?");
+    }
   };
 
-  // --- RENDERING THE ENTRY PAGE ---
-  if (!showBookingPage) {
-    return (
-      <div className="entry-page">
-        <div className="header">
+  return (
+    <div className="entry-page">
+      
+      <div className="header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
           <h2>BookYourTicket Kishore</h2>
+          <p>Coimbatore | English</p>
         </div>
+
+        {isLoggedIn ? (
+          <button onClick={() => {
+            localStorage.removeItem('token');
+            localStorage.removeItem('userEmail');
+            setIsLoggedIn(false);
+          }} style={{ background: 'transparent', color: 'white', border: '1px solid white', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>
+            Logout
+          </button>
+        ) : (
+          <button onClick={() => setShowAuth(true)} style={{ background: '#f84464', color: 'white', border: 'none', padding: '5px 15px', borderRadius: '4px', cursor: 'pointer' }}>
+            Sign In
+          </button>
+        )}
+      </div>
+
+      {showAuth ? (
+        <Auth onLoginSuccess={() => {
+          setIsLoggedIn(true);
+          setShowAuth(false);
+        }} />
+      ) : showBookingPage ? (
+        <div>
+          <div className="seat-map-container">
+            <div className="category-title">Premium - Rs. 250.00</div>
+            <div className="seat-row">
+              <div className="row-label">A</div>
+              {totalSeats.slice(0, 5).map(seatId => (
+                <div 
+                  key={seatId}
+                  className={`seat ${selectedSeats.includes(seatId) ? 'selected' : ''} ${bookedSeats.includes(seatId) ? 'booked' : ''}`}
+                  onClick={() => toggleSeat(seatId)}
+                >{seatId}</div>
+              ))}
+            </div>
+
+            <div className="category-title" style={{ marginTop: '30px' }}>Standard - Rs. 150.00</div>
+            {['B', 'C', 'D'].map((rowLetter, rowIndex) => (
+              <div className="seat-row" key={rowLetter}>
+                <div className="row-label">{rowLetter}</div>
+                {totalSeats.slice(5 + (rowIndex * 5), 10 + (rowIndex * 5)).map(seatId => (
+                  <div 
+                    key={seatId}
+                    className={`seat ${selectedSeats.includes(seatId) ? 'selected' : ''} ${bookedSeats.includes(seatId) ? 'booked' : ''}`}
+                    onClick={() => toggleSeat(seatId)}
+                  >{seatId}</div>
+                ))}
+              </div>
+            ))}
+
+            <div className="screen-container">
+              <div className="screen"></div>
+              <div className="screen-text">All eyes this way please!</div>
+            </div>
+          </div>
+
+          {selectedSeats.length > 0 && (
+            <div className="footer">
+              <button className="pay-btn" onClick={handlePayment}>
+                Pay Rs. {calculateTotal()}.00
+              </button>
+            </div>
+          )}
+        </div>
+      ) : (
         <div className="hero-banner">
           <div className="hero-content">
             <h1 className="movie-title">Inception (U/A)</h1>
@@ -108,59 +220,6 @@ function App() {
               Book Tickets
             </button>
           </div>
-        </div>
-      </div>
-    );
-  }
-
-  // --- RENDERING THE SEAT MATRIX PAGE ---
-  return (
-    <div>
-      <div className="header">
-        <h2>Inception (U/A)</h2>
-        <p>PVR Cinemas: Brookefields Mall, Coimbatore | Today, 24 Mar, 07:00 PM</p>
-      </div>
-
-      <div className="seat-map-container">
-        <div className="category-title">Premium - Rs. 250.00</div>
-        <div className="seat-row">
-          <div className="row-label">A</div>
-          {totalSeats.slice(0, 5).map(seatId => (
-            <div 
-              key={seatId}
-              // NEW: We add the 'booked' CSS class if the seat is in our bookedSeats array!
-              className={`seat ${selectedSeats.includes(seatId) ? 'selected' : ''} ${bookedSeats.includes(seatId) ? 'booked' : ''}`}
-              onClick={() => toggleSeat(seatId)}
-            >{seatId}</div>
-          ))}
-        </div>
-
-        <div className="category-title" style={{ marginTop: '30px' }}>Standard - Rs. 150.00</div>
-        {['B', 'C', 'D'].map((rowLetter, rowIndex) => (
-          <div className="seat-row" key={rowLetter}>
-            <div className="row-label">{rowLetter}</div>
-            {totalSeats.slice(5 + (rowIndex * 5), 10 + (rowIndex * 5)).map(seatId => (
-              <div 
-                key={seatId}
-                // NEW: Adding the 'booked' class here too
-                className={`seat ${selectedSeats.includes(seatId) ? 'selected' : ''} ${bookedSeats.includes(seatId) ? 'booked' : ''}`}
-                onClick={() => toggleSeat(seatId)}
-              >{seatId}</div>
-            ))}
-          </div>
-        ))}
-
-        <div className="screen-container">
-          <div className="screen"></div>
-          <div className="screen-text">All eyes this way please!</div>
-        </div>
-      </div>
-
-      {selectedSeats.length > 0 && (
-        <div className="footer">
-          <button className="pay-btn" onClick={handlePayment}>
-            Pay Rs. {calculateTotal()}.00
-          </button>
         </div>
       )}
     </div>

@@ -19,7 +19,7 @@ public class SeatScheduler {
     private TicketRepository ticketRepository; // WIRING IN THE TICKETS
 
     // Running every 60 seconds for testing
-    @Scheduled(fixedRate = 60000)
+    @Scheduled(cron = "0 0 0 * * ?")
     public void resetAllSeatsDaily() {
         System.out.println("⏰ Midnight reached! Running automated cinema reset...");
         
